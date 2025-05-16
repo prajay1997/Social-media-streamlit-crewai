@@ -3,7 +3,8 @@ import os
 import time
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew
-from crewai_tools import SerperDevTool
+#from crewai_tools import SerperDevTool
+from crewai_tools.tools.serper_dev_tool import SerperDevTool
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 
@@ -157,7 +158,7 @@ Enter a Leader name and choose your LLM to get started.
 # Sidebar for inputs
 with st.sidebar:
     st.header("⚙️ Configuration")
-    brand_name_input = st.text_input("Enter Leader/Influencer Name:", placeholder="e.g., Mamta Banerjee, Narendra Modi")
+    brand_name_input = st.text_input("Enter Leader/Influencer Name:", placeholder="e.g., Mamta Banerjee, ")
     
     # Simplified LLM choice for Streamlit
     # You could expand this if you have Ollama easily runnable in your deployment environment
