@@ -3,8 +3,7 @@ import os
 import time
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew
-#from crewai_tools import SerperDevTool
-from crewai_tools.tools.serper_dev_tool import SerperDevTool
+from crewai_tools import SerperDevTool
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 
