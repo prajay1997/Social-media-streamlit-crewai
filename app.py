@@ -49,24 +49,19 @@ def check_password():
 
     # Get password input from the user
     # Using a unique key for the password input field
-    password = st.text_input("Enter Password to Access:", type="password", key="app_password_input_field")
+    password_input = st.text_input("Enter Password to Access:", type="password", key="app_password_input_field")
 
-    if not password: # Don't proceed if password input is empty
-        # For a cleaner UI, you might not want to call st.stop() here immediately,
-        # but rather let the flow go and the main app content won't render.
-        # If you want to explicitly stop, uncomment the next line.
-        # st.stop() 
+    if not password_input: # Don't proceed if password input is empty
+        # The text_input field itself serves as a prompt.
+        # Returning False will prevent the main app from loading.
         return False
 
-    if password == correct_password:
-        # If you used st.empty() for the placeholder, you could clear it here.
-        # password_placeholder.empty() 
+    if password_input == correct_password:
         return True
-    elif password: # If a password was entered but it's incorrect
+    elif password_input: # If a password was entered but it's incorrect
         st.error("Password incorrect. Please try again.")
-        # st.stop() # Stop execution
         return False
-    return False 
+    return False # Should ideally not be reached if logic above is complete
 
 # --- Main App Logic ---
 def run_main_app():
@@ -233,16 +228,11 @@ if not st.session_state.password_correct:
         st.session_state.password_correct = True
         st.rerun() # Rerun to hide password input and show main app
     else:
-        # If check_password returns False (either incorrect or no input yet),
-        # Streamlit will stop rendering further if st.stop() was called inside check_password,
-        # or it will just not proceed to run_main_app() if st.stop() wasn't called.
-        # For the password prompt to remain, ensure st.stop() is used appropriately
-        # or that the main app content is conditionally rendered.
-        # Adding an explicit st.stop() here if password check fails and is not yet correct.
-        if not password: # from check_password, if it returned due to no input
-             st.info("Please enter the password to continue.") # Or some other placeholder message
-        st.stop()
-
+        # check_password() returned False.
+        # It would have already displayed an error for an incorrect password,
+        # or it returned False because the input was empty.
+        # The text_input widget (from within check_password) is still visible, prompting the user.
+        st.stop() # Halt further execution until password is correct or input is provided.
 
 # Only run the main app if the password has been successfully verified in this session
 if st.session_state.password_correct:
