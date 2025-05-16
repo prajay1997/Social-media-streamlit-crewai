@@ -1,0 +1,15 @@
+# Environment variables - DO NOT COMMIT THIS FILE if it contains secrets
+.env
+
+# Virtual environment
+venv/
+.venv/ # Common alternative name for venv folder
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code specific
+.vscode/
