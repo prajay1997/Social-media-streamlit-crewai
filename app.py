@@ -22,6 +22,10 @@ from crewai_tools import SerperDevTool
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 
+# --- Page Configuration (MUST BE THE FIRST STREAMLIT COMMAND) ---
+# Moved st.set_page_config to the top level of the script.
+st.set_page_config(page_title="Political Leader Sentiment Analysis", layout="wide")
+
 # --- Password Protection ---
 def check_password():
     """Returns True if the password is correct, False otherwise."""
@@ -179,9 +183,7 @@ def run_main_app():
         return None 
 
     # --- Streamlit User Interface (inside run_main_app) ---
-    # st.set_page_config should be called only once, and at the top level if possible.
-    # However, if we only call it after password check, it's fine.
-    st.set_page_config(page_title="Political Leader Sentiment Analysis", layout="wide")
+    # st.set_page_config is now at the top of the script.
     st.title("️Political Leader Journey & Sentiment Analyzer 🕵️‍♂️📊")
     st.markdown("Research a political leader and analyze public sentiment. Enter their name & LLM to start.")
 
@@ -225,12 +227,22 @@ if "password_correct" not in st.session_state:
     st.session_state.password_correct = False
 
 # Check password and run app if correct
+# The password check will now happen after st.set_page_config
 if not st.session_state.password_correct:
     if check_password(): # This will also handle input and error messages
         st.session_state.password_correct = True
-        # st.rerun() # Rerun to hide password input and show main app
+        st.rerun() # Rerun to hide password input and show main app
     else:
-        st.stop() # Stop if password check fails or is waiting for input
+        # If check_password returns False (either incorrect or no input yet),
+        # Streamlit will stop rendering further if st.stop() was called inside check_password,
+        # or it will just not proceed to run_main_app() if st.stop() wasn't called.
+        # For the password prompt to remain, ensure st.stop() is used appropriately
+        # or that the main app content is conditionally rendered.
+        # Adding an explicit st.stop() here if password check fails and is not yet correct.
+        if not password: # from check_password, if it returned due to no input
+             st.info("Please enter the password to continue.") # Or some other placeholder message
+        st.stop()
+
 
 # Only run the main app if the password has been successfully verified in this session
 if st.session_state.password_correct:
