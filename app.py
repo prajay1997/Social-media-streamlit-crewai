@@ -1,200 +1,231 @@
-import streamlit as st
-import os
-import time
-from dotenv import load_dotenv
-from crewai import Agent, Task, Crew
-from crewai_tools import SerperDevTool
-from langchain_openai import ChatOpenAI
-from langchain_community.llms import Ollama
+# --- SQLite3 Hotfix for Streamlit Sharing ---
+    # Attempt to override system sqlite3 with pysqlite3-binary
+    # This must be at the VERY TOP of the file, before any other imports that might use sqlite3
+    try:
+        print("Attempting to apply pysqlite3 hotfix...")
+        import pysqlite3
+        import sys
+        sys.modules["sqlite3"] = pysqlite3
+        print("pysqlite3 hotfix applied successfully.")
+    except ImportError:
+        print("pysqlite3 not found, hotfix not applied. Standard sqlite3 will be used.")
+    except Exception as e:
+        print(f"Error applying pysqlite3 hotfix: {e}")
+    # --- End SQLite3 Hotfix ---
 
+    import streamlit as st
+    import os
+    import time
+    from dotenv import load_dotenv
+    from crewai import Agent, Task, Crew 
+    from crewai_tools import SerperDevTool 
+    from langchain_openai import ChatOpenAI
+    from langchain_community.llms import Ollama
 
-# --- IMPORTANT: Load API Keys Securely ---
-# For local development, load from .env file
-load_dotenv() 
-
-# For Streamlit Sharing deployment, you'll set these in Secrets
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SERPER_API_KEY = os.getenv("SERPER_API_KEY")
-
-# Set environment variables for CrewAI (and other libraries if needed)
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY if OPENAI_API_KEY else "YOUR_FALLBACK_OPENAI_KEY_OR_ERROR" # Or handle if None
-os.environ["SERPER_API_KEY"] = SERPER_API_KEY if SERPER_API_KEY else "YOUR_FALLBACK_SERPER_KEY_OR_ERROR" # Or handle if None
-
-# --- Your CrewAI Code (adapted from social_media_agent.py) ---
-# Note: Removed Colab-specific parts like `from google.colab import userdata`
-
-search_tool = SerperDevTool()
-
-
-def create_llm(use_gpt=True):
-    if use_gpt:
-        # The OPENAI_API_KEY is now set as an environment variable globally
-        if not OPENAI_API_KEY:
-            st.error("OpenAI API Key not found. Please set it in your .env file or Streamlit secrets.")
-            return None
-        return ChatOpenAI(model="gpt-4o-mini") # API key is picked up from env
-    else:
-        # Ensure Ollama is configured and running if you use this option
-        try:
-            return Ollama(model="llama3.1")
-        except Exception as e:
-            st.error(f"Failed to initialize Ollama: {e}. Make sure Ollama is running and accessible.")
-            return None
-
-def create_agents(brand_name, llm):
-    if not llm:
-        return None # Propagate error if LLM couldn't be created
-    researcher = Agent(
-        role="Social Media Researcher",
-        goal=f"Research and gather information about {brand_name} from various sources",
-        backstory="You are an expert researcher with a knack for finding relevant information quickly.",
-        verbose=True,
-        allow_delegation=False,
-        tools=[search_tool],
-        llm=llm,
-        max_iter=15
-    )
-    social_media_monitor = Agent(
-        role="Social Media Monitor",
-        goal=f"Monitor social media platforms for mentions of {brand_name}",
-        backstory="You are an experienced social media analyst with keen eyes for trends and mentions.",
-        verbose=True,
-        allow_delegation=False,
-        tools=[search_tool],
-        llm=llm,
-        max_iter=15
-    )
-    sentiment_analyzer = Agent(
-        role="Sentiment Analyzer",
-        goal=f"Analyze the sentiment of social media mentions about {brand_name}",
-        backstory="You are an expert in natural language processing and sentiment analysis.",
-        verbose=True,
-        allow_delegation=False,
-        llm=llm,
-        max_iter=15
-    )
-    report_generator = Agent(
-        role="Report Generator",
-        goal=f"Generate comprehensive reports based on the analysis of {brand_name}",
-        backstory="You are a skilled data analyst and report writer, adept at presenting insights clearly.",
-        verbose=True,
-        allow_delegation=False,
-        llm=llm,
-        max_iter=15
-    )
-    return [researcher, social_media_monitor, sentiment_analyzer, report_generator]
-
-def create_tasks(brand_name, agents):
-    if not agents:
-        return None
-    research_task = Task(
-        description=f"Research {brand_name} and provide a summary of their online presence, key information, and recent activities.",
-        agent=agents[0],
-        expected_output="A structured summary containing: \n1. Brief overview of {brand_name}\n2. Key online platforms and follower counts\n3. Recent notable activities or campaigns\n4. Main products or services\n5. Any recent news or controversies"
-    )
-    monitoring_task = Task(
-        description=f"Monitor social media platforms for mentions of '{brand_name}' in the last 24 hours. Provide a summary of the mentions.",
-        agent=agents[1],
-        expected_output="A structured report containing: \n1. Total number of mentions\n2. Breakdown by platform (e.g., Twitter, Instagram, Facebook)\n3. Top 5 most engaging posts or mentions\n4. Any trending hashtags associated with {brand_name}\n5. Notable influencers or accounts mentioning {brand_name}"
-    )
-    sentiment_analysis_task = Task(
-        description=f"Analyze the sentiment of the social media mentions about {brand_name}. Categorize them as positive, negative, or neutral.",
-        agent=agents[2],
-        expected_output="A sentiment analysis report containing: \n1. Overall sentiment distribution (% positive, negative, neutral)\n2. Key positive themes or comments\n3. Key negative themes or comments\n4. Any notable changes in sentiment compared to previous periods\n5. Suggestions for sentiment improvement if necessary"
-    )
-    report_generation_task = Task(
-        description=f"Generate a comprehensive report about {brand_name} based on the research, social media mentions, and sentiment analysis. Include key insights and recommendations.",
-        agent=agents[3],
-        expected_output="A comprehensive report structured as follows: \n1. Executive Summary\n2. Brand Overview\n3. Social Media Presence Analysis\n4. Sentiment Analysis\n5. Key Insights\n6. Recommendations for Improvement\n7. Conclusion"
-    )
-    return [research_task, monitoring_task, sentiment_analysis_task, report_generation_task]
-
-def run_social_media_monitoring(brand_name, use_gpt=True, max_retries=3):
-    llm = create_llm(use_gpt)
-    if not llm:
-        st.error("LLM could not be initialized. Cannot proceed.")
-        return None
+    # --- Password Protection ---
+    def check_password():
+        """Returns True if the password is correct, False otherwise."""
+        # IMPORTANT: For better security, store your password as a Streamlit Secret
+        # Go to your app's settings on share.streamlit.io, then "Secrets"
+        # Add a secret like: APP_PASSWORD = "your_chosen_password"
+        # Then, you would use: correct_password = st.secrets["APP_PASSWORD"]
         
-    agents = create_agents(brand_name, llm)
-    if not agents:
-        st.error("Agents could not be created. Cannot proceed.")
-        return None
+        # For this example, we'll use a placeholder. 
+        # REPLACE THIS WITH YOUR ACTUAL PASSWORD CHECKING MECHANISM
+        # For a quick test, you can hardcode it, but it's not recommended for long term.
+        # Example hardcoded (replace or move to secrets):
+        # correct_password = "your_strong_password_here" 
 
-    tasks = create_tasks(brand_name, agents)
-    if not tasks:
-        st.error("Tasks could not be created. Cannot proceed.")
-        return None
-
-    crew = Crew(
-        agents=agents,
-        tasks=tasks,
-        verbose=1 # Can be 0, 1, or 2 for different levels of detail in logs
-    )
-
-    for attempt in range(max_retries):
+        # Retrieve password from Streamlit secrets if available
         try:
-            with st.spinner(f"CrewAI is working on '{brand_name}'... Attempt {attempt + 1}/{max_retries}"):
-                result = crew.kickoff()
-            return result
-        except Exception as e:
-            st.error(f"Attempt {attempt + 1} failed: {str(e)}")
-            if attempt < max_retries - 1:
-                st.warning("Retrying...")
-                time.sleep(5)
-            else:
-                st.error("Max retries reached. Unable to complete the task.")
-                return None
+            correct_password = st.secrets.get("APP_PASSWORD")
+            if not correct_password: # If APP_PASSWORD is not set in secrets
+                st.error("App password not configured in Streamlit secrets. Please contact the administrator.")
+                return False # Or handle as a configuration error
+        except Exception as e: # Handles cases where st.secrets might not be available or other errors
+            st.error("Could not retrieve app password. Please contact the administrator.")
+            # Fallback for local testing if secrets aren't set up:
+            # correct_password = "testpassword" # Remove this line for deployment
+            # st.warning("Using fallback password for local testing. Ensure APP_PASSWORD is set in Streamlit secrets for deployment.")
+            return False
 
-# --- Streamlit User Interface ---
-st.set_page_config(page_title="Social Media Monitoring Crew for Political", layout="wide")
 
-st.title("Social Media Monitoring CrewAI Agent for Research for Poltical Leader 🕵️‍♂️📊")
-st.markdown("""
-"Research a political leader and analyze public sentiments and generate a report.
-Enter a Leader name and choose your LLM to get started.
-""")
+        # Get password input from the user
+        password_placeholder = st.empty()
+        password = password_placeholder.text_input("Enter Password to Access:", type="password", key="app_password_input")
 
-# Sidebar for inputs
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    brand_name_input = st.text_input("Enter Leader/Influencer Name:", placeholder="e.g., Mamta Banerjee, ")
-    
-    # Simplified LLM choice for Streamlit
-    # You could expand this if you have Ollama easily runnable in your deployment environment
-    llm_option = st.radio("Choose LLM:", ("GPT-4o-mini (OpenAI)", "Ollama (Local - Llama3.1 - Advanced)"))
-    
-    use_gpt_model = True # Default to GPT
-    if llm_option == "Ollama (Local - Llama3.1 - Advanced)":
-        use_gpt_model = False
-        st.info("Ensure your Ollama server is running and accessible if you choose this option.")
+        if not password: # Don't proceed if password input is empty
+            st.stop() # Stop execution until password is entered
+            return False
 
-    submit_button = st.button("🚀 Analyze Brand")
+        if password == correct_password:
+            password_placeholder.empty() # Clear the password input field
+            return True
+        elif password: # If a password was entered but it's incorrect
+            st.error("Password incorrect. Please try again.")
+            st.stop() # Stop execution
+            return False
+        return False # Should not be reached if st.stop() works as expected
 
-# Main area for results
-if submit_button and brand_name_input:
-    if not OPENAI_API_KEY and use_gpt_model:
-        st.error("OpenAI API Key is missing. Please add it to your .env file locally, or as a secret if deployed.")
-    elif not SERPER_API_KEY:
-        st.error("Serper API Key is missing. Please add it to your .env file locally, or as a secret if deployed.")
-    else:
-        st.info(f"Starting analysis for: **{brand_name_input}** using **{'GPT' if use_gpt_model else 'Ollama'}**...")
-        
-        # Placeholder for the report
-        report_placeholder = st.empty()
-        report_placeholder.markdown("### 📝 Generating Report...")
+    # --- Main App Logic ---
+    def run_main_app():
+        # --- Load API Keys Securely ---
+        load_dotenv() 
 
-        final_report = run_social_media_monitoring(brand_name_input, use_gpt=use_gpt_model)
+        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+        SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-        report_placeholder.empty() # Clear the "Generating" message
-
-        if final_report:
-            st.subheader("📈 Final Report:")
-            st.markdown(final_report) # CrewAI often returns markdown
+        # Set environment variables for CrewAI (and other libraries if needed)
+        if OPENAI_API_KEY:
+            os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+        if SERPER_API_KEY:
+            os.environ["SERPER_API_KEY"] = SERPER_API_KEY
         else:
-            st.error("Failed to generate the report after multiple retries. Please check the logs or try again.")
+            st.warning("SERPER_API_KEY not found in .env file or Streamlit secrets. Search functionality might be limited or fail.")
 
-elif submit_button and not brand_name_input:
-    st.warning("Please enter a brand name.")
+        search_tool = SerperDevTool()
 
-st.markdown("---")
-st.markdown("Powered by CrewAI & Streamlit")
+        # --- LLM Creation Function ---
+        def create_llm(use_gpt=True):
+            if use_gpt:
+                if not OPENAI_API_KEY:
+                    st.error("OpenAI API Key not found. Please set it in your .env file or Streamlit secrets if you wish to use GPT.")
+                    return None
+                try:
+                    return ChatOpenAI(model="gpt-4o-mini") 
+                except Exception as e:
+                    st.error(f"Failed to initialize OpenAI GPT: {e}")
+                    return None
+            else:
+                st.info("Attempting to connect to Ollama with model 'llama3.1'...")
+                try:
+                    llm_ollama = Ollama(model="llama3.1")
+                    st.success("Successfully connected to Ollama with model 'llama3.1'.")
+                    return llm_ollama
+                except Exception as e:
+                    st.error(f"Failed to initialize or connect to Ollama: {e}\n"
+                               "Please ensure Ollama server is running and 'llama3.1' model is pulled.")
+                    return None
+
+        # --- Agent Creation Function ---
+        def create_agents(brand_name, llm):
+            if not llm:
+                st.error("LLM not initialized. Cannot create agents.")
+                return None
+            
+            researcher = Agent(
+                role="Political Journey Researcher",
+                goal=f"Research and gather comprehensive information about the political journey of {brand_name}, including key milestones, roles, and public statements.",
+                backstory="You are an expert political analyst and researcher with a keen eye for detail and unbiased reporting. You excel at finding verified information from diverse sources.",
+                verbose=True, allow_delegation=False, tools=[search_tool], llm=llm, max_iter=15
+            )
+            sentiment_analyzer = Agent(
+                role="Public Sentiment Analyzer",
+                goal=f"Analyze the public sentiment surrounding {brand_name} based on recent news, social media, and public discourse. Identify key positive, negative, and neutral themes.",
+                backstory="You are an expert in natural language processing and sentiment analysis, specializing in political contexts. You can discern nuanced opinions and identify emerging trends.",
+                verbose=True, allow_delegation=False, tools=[search_tool], llm=llm, max_iter=15
+            )
+            report_generator = Agent(
+                role="Political Report Synthesizer",
+                goal=f"Generate a comprehensive and balanced report on {brand_name}'s political journey and the public sentiment surrounding them, based on the provided research and analysis.",
+                backstory="You are a skilled writer and analyst, adept at synthesizing complex information into clear, concise, and insightful reports for political strategists and public understanding.",
+                verbose=True, allow_delegation=False, llm=llm, max_iter=15
+            )
+            return [researcher, sentiment_analyzer, report_generator]
+
+        # --- Task Creation Function ---
+        def create_tasks(brand_name, agents):
+            if not agents or len(agents) < 3: 
+                st.error("Agents not properly initialized. Cannot create tasks.")
+                return None
+            research_task = Task(
+                description=f"Conduct in-depth research on the political career of {brand_name}. Focus on their rise, key positions held, significant policy stances, major achievements, and any notable controversies. Compile a factual overview.",
+                agent=agents[0], 
+                expected_output=f"A structured factual summary of {brand_name}'s political journey..." # Truncated for brevity
+            )
+            sentiment_analysis_task = Task(
+                description=f"Analyze current public sentiment towards {brand_name}. Gather information from recent (last 3-6 months) news articles, social media discussions (if accessible via search), and opinion pieces. Categorize sentiment as predominantly positive, negative, or mixed/neutral, and identify the main drivers for these sentiments.",
+                agent=agents[1], 
+                expected_output=f"A sentiment analysis report for {brand_name} covering..." # Truncated for brevity
+            )
+            report_generation_task = Task(
+                description=f"Compile all gathered information from the research on {brand_name}'s political journey and the sentiment analysis into a single, comprehensive report. The report should be objective, well-structured, and provide actionable insights if possible.",
+                agent=agents[2], 
+                expected_output=f"A comprehensive report on {brand_name}, structured as follows..." # Truncated for brevity
+            )
+            return [research_task, sentiment_analysis_task, report_generation_task]
+
+        # --- Main Crew Execution Function ---
+        def run_crew_analysis(leader_name, use_gpt_model=True, max_retries=3):
+            llm = create_llm(use_gpt=use_gpt_model)
+            if not llm: return None
+            agents = create_agents(leader_name, llm)
+            if not agents: return None
+            tasks = create_tasks(leader_name, agents)
+            if not tasks: return None
+            crew = Crew(agents=agents, tasks=tasks, verbose=1)
+            for attempt in range(max_retries):
+                try:
+                    with st.spinner(f"CrewAI is analyzing '{leader_name}'... Attempt {attempt + 1}/{max_retries}"):
+                        result = crew.kickoff()
+                    return result
+                except Exception as e:
+                    st.error(f"CrewAI analysis attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        st.warning("Retrying...")
+                        time.sleep(5)
+                    else:
+                        st.error("Max retries reached for CrewAI analysis. Unable to complete the task.")
+                        return None
+            return None 
+
+        # --- Streamlit User Interface (inside run_main_app) ---
+        st.set_page_config(page_title="Political Leader Sentiment Analysis", layout="wide")
+        st.title("️Political Leader Journey & Sentiment Analyzer 🕵️‍♂️📊")
+        st.markdown("Research a political leader and analyze public sentiment. Enter their name & LLM to start.")
+
+        with st.sidebar:
+            st.header("⚙️ Configuration")
+            leader_name_input = st.text_input("Enter Political Leader's Name:", placeholder="e.g., Jacinda Ardern")
+            llm_option = st.radio(
+                "Choose LLM:", 
+                ("GPT-4o-mini (OpenAI - Requires API Key)", "Ollama (Local - Llama3.1 - Advanced)")
+            )
+            use_gpt_selection = True 
+            if llm_option == "Ollama (Local - Llama3.1 - Advanced)":
+                use_gpt_selection = False
+                st.info("Ensure your Ollama server is running locally and 'llama3.1' model is pulled.")
+            submit_button = st.button("🚀 Analyze Leader")
+
+        if submit_button and leader_name_input:
+            if use_gpt_selection and not OPENAI_API_KEY:
+                st.error("OpenAI API Key is missing. Please add it to your .env file or as a Streamlit secret if deployed.")
+            elif not SERPER_API_KEY: 
+                st.error("Serper API Key (SERPER_API_KEY) is missing. Please add it to your .env file or as a Streamlit secret. This key is required for web searches by the agents.")
+            else:
+                st.info(f"Starting analysis for: **{leader_name_input}** using **{'GPT (OpenAI)' if use_gpt_selection else 'Ollama (Llama3.1)'}**...")
+                report_placeholder = st.empty()
+                report_placeholder.markdown("### 📝 Generating Report...")
+                final_report = run_crew_analysis(leader_name_input, use_gpt_model=use_gpt_selection)
+                report_placeholder.empty() 
+                if final_report:
+                    st.subheader("📈 Final Report:")
+                    st.markdown(final_report)
+                else:
+                    st.error("Failed to generate the report. Please check the logs or error messages above and ensure your selected LLM is configured correctly.")
+        elif submit_button and not leader_name_input:
+            st.warning("Please enter a political leader's name.")
+        st.markdown("---")
+        st.markdown("Powered by CrewAI & Streamlit")
+
+    # --- App Entry Point with Password Check ---
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False # Initialize session state
+
+    if st.session_state.password_correct or check_password():
+        st.session_state.password_correct = True # Set to true if password was correct
+        run_main_app()
+    else:
+        # Password check will display errors or stop execution if incorrect
+        # This else block might not be strictly necessary if check_password uses st.stop()
+        pass
