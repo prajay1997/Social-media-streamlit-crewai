@@ -447,7 +447,7 @@ def execute_crew_analysis(political_entity_name, start_date_str_param, use_gpt_m
 # --- Main Streamlit App Logic ---
 def run_main_app():
     st.title(" PoliSight Analyst Suite 🕵️‍♂️📊")
-    st.markdown("Welcome! Get detailed political analysis reports. Please configure below and click 'Analyze'.")
+    st.markdown("Welcome! Get comprehensive political analysis on leaders, parties, or influencers.. Please configure below and click 'Analyze'.")
 
     # Initialize tools and keys - crucial to do this early in the app flow
     # This function now also handles initializing search_tool_instance
