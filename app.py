@@ -98,63 +98,24 @@ def check_password():
 
 # --- Core CrewAI Logic (adapted from your script) ---
 
+# --- Main App Logic ---
 def initialize_tools_and_keys():
-    """Loads API keys and initializes tools. Returns True if critical tools are ready."""
-    global search_tool_instance  # To modify the global instance
+    # --- Load API Keys Securely ---
+    load_dotenv() 
 
-    # Load from .env file if it exists (for local development)
-    load_dotenv()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
-    # Load OpenAI Key
-    openai_api_key_val = st.secrets.get("OPENAI_API_KEY") if hasattr(st, 'secrets') else None
-    if not openai_api_key_val:
-        openai_api_key_val = os.getenv("OPENAI_API_KEY")
-
-    if openai_api_key_val:
-        os.environ["OPENAI_API_KEY"] = openai_api_key_val
+    # Set environment variables for CrewAI (and other libraries if needed)
+    if OPENAI_API_KEY:
+        os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+    if SERPER_API_KEY:
+        os.environ["SERPER_API_KEY"] = SERPER_API_KEY
     else:
-        st.sidebar.warning("⚠️ OPENAI_API_KEY not found. GPT-based models will not function.")
+        # This warning will appear in the main app area if the password is correct
+        st.warning("SERPER_API_KEY not found in .env file or Streamlit secrets. Search functionality might be limited or fail.")
 
-    # Load Serper Key
-    serper_api_key_val = st.secrets.get("SERPER_API_KEY") if hasattr(st, 'secrets') else None
-    if not serper_api_key_val:
-        serper_api_key_val = os.getenv("SERPER_API_KEY")
-
-    if serper_api_key_val:
-        os.environ["SERPER_API_KEY"] = serper_api_key_val
-    else:
-        st.sidebar.warning("⚠️ SERPER_API_KEY not found. Web search will fallback to dummy tool.")
-
-    # Instantiate Serper Search Tool
-    search_tool_instance = None  # Reset
-    if SerperDevTool and os.getenv("SERPER_API_KEY"):
-        try:
-            search_tool_instance = SerperDevTool()
-            st.sidebar.success("✅ SerperDevTool initialized.")
-        except Exception as e:
-            st.sidebar.error(f"❌ Failed to initialize SerperDevTool: {e}")
-            search_tool_instance = None
-
-    # Fallback to dummy if Serper failed
-    if search_tool_instance is None and BaseTool is not object:
-        st.sidebar.warning("🛠 Using Dummy Search Tool as fallback.")
-        class DummySearchTool(BaseTool):
-            name: str = "Dummy Search Tool"
-            description: str = "Returns placeholder responses instead of real search results."
-
-            def _run(self, search_query: str) -> str:
-                return f"(No real search performed for: '{search_query}')"
-
-        try:
-            search_tool_instance = DummySearchTool()
-        except Exception as e_dummy:
-            st.sidebar.error(f"Failed to create DummySearchTool: {e_dummy}")
-            return False
-    elif search_tool_instance is None and BaseTool is object:
-        st.sidebar.error("❌ BaseTool not available. Cannot even use dummy search.")
-        return False
-
-    return True  # Initialization successful
+    search_tool = SerperDevTool()
 
 
 def create_llm_streamlit(use_gpt=True):
