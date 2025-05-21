@@ -1,6 +1,4 @@
-# --- SQLite3 Hotfix for Streamlit Sharing ---
-# Attempt to override system sqlite3 with pysqlite3-binary
-# This must be at the VERY TOP of the file, before any other imports that might use sqlite3
+
 try:
     # print("Attempting to apply pysqlite3 hotfix...") # Optional: for local debug
     import pysqlite3
@@ -102,66 +100,61 @@ def check_password():
 
 def initialize_tools_and_keys():
     """Loads API keys and initializes tools. Returns True if critical tools are ready."""
-    global search_tool_instance # To modify the global instance
+    global search_tool_instance  # To modify the global instance
 
     # Load from .env file if it exists (for local development)
     load_dotenv()
 
-    # OpenAI API Key
-    # 1. Try Streamlit secrets (for deployed app)
-    # 2. Try environment variable (for local .env or system env)
+    # Load OpenAI Key
     openai_api_key_val = st.secrets.get("OPENAI_API_KEY") if hasattr(st, 'secrets') else None
     if not openai_api_key_val:
         openai_api_key_val = os.getenv("OPENAI_API_KEY")
-    
+
     if openai_api_key_val:
         os.environ["OPENAI_API_KEY"] = openai_api_key_val
-        # st.sidebar.success("OpenAI API Key loaded.", icon="🔑") # Optional feedback
     else:
-        # This warning will be shown if GPT is selected later
-        pass
+        st.sidebar.warning("⚠️ OPENAI_API_KEY not found. GPT-based models will not function.")
 
-    # Serper API Key
+    # Load Serper Key
     serper_api_key_val = st.secrets.get("SERPER_API_KEY") if hasattr(st, 'secrets') else None
     if not serper_api_key_val:
         serper_api_key_val = os.getenv("SERPER_API_KEY")
 
     if serper_api_key_val:
         os.environ["SERPER_API_KEY"] = serper_api_key_val
-        # st.sidebar.success("Serper API Key loaded.", icon="🔑") # Optional feedback
     else:
-        # Warning will be shown in the UI if Serper is needed
-        pass # Handled later
+        st.sidebar.warning("⚠️ SERPER_API_KEY not found. Web search will fallback to dummy tool.")
 
-    # Instantiate Search Tool
-    search_tool_instance = None # Reset
+    # Instantiate Serper Search Tool
+    search_tool_instance = None  # Reset
     if SerperDevTool and os.getenv("SERPER_API_KEY"):
         try:
             search_tool_instance = SerperDevTool()
-            # st.sidebar.info("SerperDevTool initialized.") # Optional feedback
+            st.sidebar.success("✅ SerperDevTool initialized.")
         except Exception as e:
-            st.sidebar.error(f"Failed to initialize SerperDevTool: {e}")
+            st.sidebar.error(f"❌ Failed to initialize SerperDevTool: {e}")
             search_tool_instance = None
-    
+
+    # Fallback to dummy if Serper failed
     if search_tool_instance is None and BaseTool is not object:
-        st.sidebar.warning("SerperDevTool failed or API key missing. Using Dummy Search.")
+        st.sidebar.warning("🛠 Using Dummy Search Tool as fallback.")
         class DummySearchTool(BaseTool):
-            name: str = "Dummy Search Tool (Real Search Unavailable)"
-            description: str = "A dummy search tool. Returns a placeholder message."
+            name: str = "Dummy Search Tool"
+            description: str = "Returns placeholder responses instead of real search results."
+
             def _run(self, search_query: str) -> str:
-                return f"Search for '{search_query}' was NOT PERFORMED. Real web search tool is unavailable."
+                return f"(No real search performed for: '{search_query}')"
+
         try:
             search_tool_instance = DummySearchTool()
         except Exception as e_dummy:
             st.sidebar.error(f"Failed to create DummySearchTool: {e_dummy}")
-            search_tool_instance = None # Critical failure
-            return False # Indicate critical tool failure
-            
+            return False
     elif search_tool_instance is None and BaseTool is object:
-        st.sidebar.error("CRITICAL: BaseTool not imported. Cannot create dummy search tool.")
-        return False # Indicate critical tool failure
+        st.sidebar.error("❌ BaseTool not available. Cannot even use dummy search.")
+        return False
 
-    return True # Indicate successful (or dummy) tool setup
+    return True  # Initialization successful
 
 
 def create_llm_streamlit(use_gpt=True):
