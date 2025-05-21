@@ -1,166 +1,129 @@
 # --- SQLite3 Hotfix for Streamlit Sharing ---
 # This must be at the VERY TOP of the file.
 try:
+    # Using print statements here for initial hotfix status, as st may not be fully ready.
+    # These will go to the terminal/logs on Streamlit Cloud.
+    # print("Attempting to apply pysqlite3 hotfix...")
     import pysqlite3
     import sys
     sys.modules["sqlite3"] = pysqlite3
+    # print("pysqlite3 hotfix applied successfully.")
 except ImportError:
+    # print("pysqlite3 not found, hotfix not applied. Standard sqlite3 will be used.")
     pass # Silently pass if not available
+except Exception as e:
+    # print(f"Error applying pysqlite3 hotfix: {e}")
+    pass
 
 import streamlit as st
 import os
 import time
-from datetime import datetime, timedelta, date
-from crewai import Agent, Task, Crew, Process
-
-# --- Tool Imports ---
-# BaseTool is used for the DummySearchTool fallback.
+from datetime import datetime, timedelta, date # Added date for consistency
+from crewai import Agent, Task, Crew, Process # Added Process
+from crewai_tools import SerperDevTool
+from langchain_openai import ChatOpenAI
+from langchain_community.llms import Ollama # For Ollama
 try:
-    from langchain_core.tools import BaseTool
+    from langchain_core.tools import BaseTool # For DummySearchTool
 except ImportError:
     st.error("CRITICAL ERROR: langchain_core.tools.BaseTool not found. Fallback dummy search tool will not function.")
-    BaseTool = object 
-
-try:
-    from crewai_tools import SerperDevTool
-except ImportError:
-    st.warning("CRITICAL WARNING: crewai_tools or SerperDevTool not found. Web search will NOT function as expected.")
-    SerperDevTool = None
-
-# --- LLM Imports ---
-try:
-    from langchain_openai import ChatOpenAI
-except ImportError:
-    st.warning("CRITICAL WARNING: langchain_openai not found. OpenAI models will NOT be available unless installed.")
-    ChatOpenAI = None
-
-try:
-    from langchain_community.llms import Ollama
-except ImportError:
-    try:
-        from langchain.llms import Ollama # Older import path
-    except ImportError:
-        st.warning("CRITICAL WARNING: langchain_community.llms or langchain.llms with Ollama not found. Ollama models will NOT be available unless installed.")
-        Ollama = None
+    BaseTool = object # To prevent NameErrors if import fails
 
 # --- Page Configuration (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(page_title="PoliSight Analyst Suite", layout="wide", initial_sidebar_state="expanded")
 
-# --- Global variable for initialized search tool ---
+# --- Global Variables for Key Status & Search Tool ---
+# These will be updated by initialize_streamlit_keys_and_tools()
+openai_api_key_loaded = False
+serper_api_key_loaded = False
 search_tool_instance = None
-serper_key_loaded_successfully = False
-openai_key_loaded_successfully = False
 
-# --- Password Protection Function ---
+# --- Password Protection ---
 def check_password():
-    """Returns True if the password is correct, False otherwise."""
-    # This function will primarily use st.secrets for the APP_PASSWORD
-    # It includes a fallback to os.getenv for LOCAL_APP_PASSWORD for local testing,
-    # but for Streamlit Cloud, st.secrets["APP_PASSWORD"] is the target.
-
-    correct_password_value = None
-    password_source_message = ""
-
+    """Returns True if the password is correct, False otherwise.
+    Primarily uses st.secrets["APP_PASSWORD"] for deployed apps.
+    """
+    correct_password_from_secrets = None
     try:
         if hasattr(st, 'secrets') and "APP_PASSWORD" in st.secrets:
-            correct_password_value = st.secrets.get("APP_PASSWORD")
-            if correct_password_value and isinstance(correct_password_value, str) and correct_password_value.strip():
-                password_source_message = "Using APP_PASSWORD from Streamlit Secrets."
-            else:
-                # Secret exists but is empty or invalid
+            correct_password_from_secrets = st.secrets.get("APP_PASSWORD")
+            if not (correct_password_from_secrets and isinstance(correct_password_from_secrets, str) and correct_password_from_secrets.strip()):
                 st.error("APP_PASSWORD found in Streamlit Secrets but is empty or invalid. Please check its value in your app settings.")
-                correct_password_value = None # Treat as not found for security
+                return False # Treat as incorrect if empty/invalid
         else:
-            # APP_PASSWORD not in st.secrets, try local fallback if needed (though for deployment, this path means misconfiguration)
-            password_source_message = "APP_PASSWORD not found in Streamlit Secrets. "
-            # Fallback for local development if st.secrets is not configured or APP_PASSWORD is not set
-            # For deployed app, this indicates an issue if reached.
-            local_password_env = os.getenv("LOCAL_APP_PASSWORD")
-            if local_password_env:
-                correct_password_value = local_password_env
-                password_source_message += "Using LOCAL_APP_PASSWORD environment variable (for local testing)."
-            else:
-                # No Streamlit secret, no local env var, use hardcoded default for local testing only
-                correct_password_value = "testpassword123" # Default local fallback
-                password_source_message += "Using default local fallback password 'testpassword123'. THIS IS FOR LOCAL TESTING ONLY."
-                st.sidebar.caption("Hint (Local Only): Default password is 'testpassword123' or set LOCAL_APP_PASSWORD.")
-                
+            st.error("APP_PASSWORD not found in Streamlit Secrets. This app requires a password. Please contact the administrator.")
+            return False
     except Exception as e:
-        st.sidebar.error(f"Error retrieving app password: {e}")
-        st.sidebar.warning("Falling back to default local password due to error. THIS IS FOR LOCAL TESTING ONLY.")
-        correct_password_value = "testpassword123" # Emergency fallback for local testing
-        st.sidebar.caption("Hint (Local Only): Default password is 'testpassword123'")
-
-    # Display password source info in sidebar for clarity during testing
-    if 'password_source_displayed' not in st.session_state and password_source_message:
-        st.sidebar.info(password_source_message)
-        st.session_state.password_source_displayed = True
-
-
-    if not correct_password_value: # If somehow still None or empty after checks
-        st.error("CRITICAL: App password configuration is missing or invalid. Please set APP_PASSWORD in Streamlit Secrets.")
+        st.error(f"Could not retrieve app password from Streamlit Secrets. Error: {e}")
         return False
 
-    # Password input field
-    # Using a unique key for the password input to avoid conflicts
-    password_input = st.text_input("Enter Password to Access:", type="password", key="app_access_password_input")
+    if not correct_password_from_secrets: # Should be caught above, but as a safeguard
+        st.error("App password configuration is critically missing.")
+        return False
+
+    password_input = st.text_input("Enter Password to Access:", type="password", key="app_password_input_main_v2")
 
     if not password_input:
         st.info("Please enter the password to proceed.")
-        return False # Don't proceed if no input
+        return False
 
-    if password_input == correct_password_value:
+    if password_input == correct_password_from_secrets:
         return True
     elif password_input: # If a password was entered but it's incorrect
         st.error("Password incorrect. Please try again.")
         return False
-    
-    return False # Default case
+    return False
 
 
 def initialize_streamlit_keys_and_tools():
     """
     Loads API keys from Streamlit secrets, sets them as environment variables,
-    and initializes the search tool.
-    Updates global flags for key loading status.
+    and initializes the search tool. Updates global flags.
+    This function should be called once after password verification.
     """
-    global search_tool_instance, serper_key_loaded_successfully, openai_key_loaded_successfully
-
-    serper_key_loaded_successfully = False
-    openai_key_loaded_successfully = False
+    global openai_api_key_loaded, serper_api_key_loaded, search_tool_instance
 
     st.sidebar.subheader("🔑 API Key Status")
 
+    # Load OpenAI API Key
     try:
         if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
-            openai_api_key_from_secrets = st.secrets["OPENAI_API_KEY"]
-            if openai_api_key_from_secrets and isinstance(openai_api_key_from_secrets, str) and openai_api_key_from_secrets.strip():
-                os.environ["OPENAI_API_KEY"] = openai_api_key_from_secrets
-                openai_key_loaded_successfully = True
-                st.sidebar.success("OpenAI API Key: Loaded successfully from Secrets.", icon="✅")
+            key_val = st.secrets["OPENAI_API_KEY"]
+            if key_val and isinstance(key_val, str) and key_val.strip():
+                os.environ["OPENAI_API_KEY"] = key_val
+                openai_api_key_loaded = True
+                st.sidebar.success("OpenAI API Key: Loaded from Secrets.", icon="✅")
             else:
-                st.sidebar.error("OpenAI API Key: Found in Secrets but is empty or invalid.", icon="❌")
+                st.sidebar.error("OpenAI API Key: Found in Secrets but is empty/invalid.", icon="❌")
+                openai_api_key_loaded = False
         else:
             st.sidebar.error("OpenAI API Key: Not found in Streamlit Secrets.", icon="❌")
+            openai_api_key_loaded = False
     except Exception as e:
-        st.sidebar.error(f"OpenAI API Key: Error loading from Secrets - {e}", icon="❌")
+        st.sidebar.error(f"OpenAI API Key: Error loading - {e}", icon="❌")
+        openai_api_key_loaded = False
 
+    # Load Serper API Key
     try:
         if hasattr(st, 'secrets') and "SERPER_API_KEY" in st.secrets:
-            serper_api_key_from_secrets = st.secrets["SERPER_API_KEY"]
-            if serper_api_key_from_secrets and isinstance(serper_api_key_from_secrets, str) and serper_api_key_from_secrets.strip():
-                os.environ["SERPER_API_KEY"] = serper_api_key_from_secrets
-                serper_key_loaded_successfully = True
-                st.sidebar.success("Serper API Key: Loaded successfully from Secrets.", icon="✅")
+            key_val = st.secrets["SERPER_API_KEY"]
+            if key_val and isinstance(key_val, str) and key_val.strip():
+                os.environ["SERPER_API_KEY"] = key_val
+                serper_api_key_loaded = True
+                st.sidebar.success("Serper API Key: Loaded from Secrets.", icon="✅")
             else:
-                st.sidebar.error("Serper API Key: Found in Secrets but is empty or invalid.", icon="❌")
+                st.sidebar.error("Serper API Key: Found in Secrets but is empty/invalid.", icon="❌")
+                serper_api_key_loaded = False
         else:
             st.sidebar.error("Serper API Key: Not found in Streamlit Secrets.", icon="❌")
+            serper_api_key_loaded = False
     except Exception as e:
-        st.sidebar.error(f"Serper API Key: Error loading from Secrets - {e}", icon="❌")
+        st.sidebar.error(f"Serper API Key: Error loading - {e}", icon="❌")
+        serper_api_key_loaded = False
 
+    # Instantiate Search Tool
     st.sidebar.subheader("🛠️ Search Tool Status")
-    if SerperDevTool and serper_key_loaded_successfully:
+    if SerperDevTool and serper_api_key_loaded:
         try:
             search_tool_instance = SerperDevTool()
             st.sidebar.success("SerperDevTool: Initialized successfully.", icon="✅")
@@ -170,55 +133,68 @@ def initialize_streamlit_keys_and_tools():
     elif not SerperDevTool:
         st.sidebar.error("SerperDevTool: Library not imported. Search unavailable.", icon="❌")
         search_tool_instance = None
-    else:
-        st.sidebar.warning("SerperDevTool: Not initialized (SERPER_API_KEY missing or invalid).", icon="⚠️")
+    else: # SerperDevTool imported but key not loaded
+        st.sidebar.warning("SerperDevTool: Not initialized (SERPER_API_KEY issue).", icon="⚠️")
         search_tool_instance = None
 
-    if search_tool_instance is None and BaseTool is not object :
-        st.sidebar.warning("Using Dummy Search Tool as fallback.", icon="💡")
-        class DummySearchTool(BaseTool):
-            name: str = "Dummy Search Tool (Real Search Unavailable)"
-            description: str = "A dummy search tool. Returns a placeholder message indicating search was not performed."
-            def _run(self, search_query: str) -> str:
-                return f"Search for '{search_query}' was NOT PERFORMED. The real web search tool (SerperDevTool) is unavailable or not configured correctly."
-        try:
-            search_tool_instance = DummySearchTool()
-        except Exception as e_dummy:
-            st.sidebar.error(f"DummySearchTool: Failed to create - {e_dummy}", icon="❌")
-            search_tool_instance = None
-    elif search_tool_instance is None and BaseTool is object:
-        st.sidebar.error("CRITICAL: BaseTool not imported. Cannot create DummySearchTool.", icon="❌")
+    # Fallback to Dummy Search Tool
+    if search_tool_instance is None:
+        if BaseTool is not object:
+            st.sidebar.warning("Using Dummy Search Tool as fallback.", icon="💡")
+            class DummySearchTool(BaseTool):
+                name: str = "Dummy Search Tool (Real Search Unavailable)"
+                description: str = "A dummy search tool. Returns a placeholder message."
+                def _run(self, search_query: str) -> str:
+                    return f"Search for '{search_query}' was NOT PERFORMED. Real web search tool is unavailable."
+            try:
+                search_tool_instance = DummySearchTool()
+            except Exception as e_dummy:
+                st.sidebar.error(f"DummySearchTool: Failed to create - {e_dummy}", icon="❌")
+        else:
+            st.sidebar.error("CRITICAL: BaseTool not imported. Cannot create DummySearchTool.", icon="❌")
 
-    return openai_key_loaded_successfully # Only return status of OpenAI key for now, search tool handled by global
 
-
+# --- LLM Creation Function ---
 def create_llm_streamlit(use_gpt=True):
     if use_gpt:
+        if not openai_api_key_loaded:
+            st.error("OpenAI API Key not loaded. Cannot use GPT model.")
+            return None
         if ChatOpenAI is None:
-            st.error("Langchain OpenAI component not loaded. Cannot use GPT model.")
-            return None
-        if not openai_key_loaded_successfully:
-            st.error("OpenAI API Key not loaded successfully. Cannot initialize GPT model.")
-            return None
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=os.getenv("OPENAI_API_KEY"))
-    else:
-        if Ollama is None:
-            st.error("Ollama component not loaded. Cannot use Ollama model.")
+            st.error("ChatOpenAI library not available. Cannot use GPT model.")
             return None
         try:
-            llm = Ollama(model="llama3.1")
-            return llm
+            return ChatOpenAI(model="gpt-4o-mini", temperature=0.5) # API key is set in environ
         except Exception as e:
-            st.error(f"Failed to initialize Ollama: {e}. Ensure Ollama server is running and the model 'llama3.1' is pulled.")
+            st.error(f"Failed to initialize OpenAI GPT: {e}")
+            return None
+    else: # Ollama
+        if Ollama is None:
+            st.error("Ollama library not available. Cannot use Ollama model.")
+            return None
+        st.info("Attempting to connect to Ollama with model 'llama3.1'...")
+        try:
+            llm_ollama = Ollama(model="llama3.1")
+            # Simple test to confirm connection if possible, though this might be slow
+            # try:
+            #     llm_ollama.invoke("test")
+            #     st.success("Successfully connected to Ollama with model 'llama3.1'.")
+            # except Exception as ollama_test_e:
+            #     st.warning(f"Ollama initialized, but test invocation failed: {ollama_test_e}. Ensure server is responsive.")
+            return llm_ollama
+        except Exception as e:
+            st.error(f"Failed to initialize or connect to Ollama: {e}\n"
+                       "Please ensure Ollama server is running and 'llama3.1' model is pulled.")
             return None
 
+# --- Agent Creation Function (Adapted from your reference) ---
 def create_political_agents_streamlit(political_entity_name, llm):
     global search_tool_instance
     agent_tools_list = []
     if search_tool_instance:
         agent_tools_list.append(search_tool_instance)
     else:
-        st.warning("No search tool (Serper or Dummy) is available for agents. Analysis will rely solely on LLM's internal knowledge.")
+        st.warning("No search tool available for agents. Analysis will rely on LLM's internal knowledge.", icon="⚠️")
 
     activity_researcher = Agent(
         role="Political Affairs & Community Impact Investigator",
@@ -270,6 +246,7 @@ def create_political_agents_streamlit(political_entity_name, llm):
     )
     return [activity_researcher, landscape_monitor, sentiment_analyzer, report_writer]
 
+# --- Task Creation Function (Adapted from your reference) ---
 def create_political_tasks_streamlit(political_entity_name, agents, start_date_str, current_date_str, past_sentiment_start_str, past_sentiment_end_str):
     activity_researcher, landscape_monitor, sentiment_analyzer, report_writer = agents
     analysis_period_str = f"between {start_date_str} and {current_date_str}"
@@ -352,19 +329,20 @@ def create_political_tasks_streamlit(political_entity_name, agents, start_date_s
     )
     return [task1_research_activities_community, task2_monitor_landscape, task3_analyze_sentiment, task4_compile_final_report]
 
-def execute_crew_analysis_streamlit(political_entity_name, start_date_str_param, use_gpt_model=True, max_retries=3):
-    llm_instance = create_llm_streamlit(use_gpt=use_gpt_model)
-    if llm_instance is None:
-        st.error("CRITICAL: LLM initialization failed. Cannot proceed with analysis.")
+# --- Main Crew Execution Function ---
+def execute_crew_analysis_streamlit(leader_name, start_date_str_param, use_gpt_model=True, max_retries=3):
+    llm = create_llm_streamlit(use_gpt=use_gpt_model)
+    if not llm:
+        # Error already shown by create_llm_streamlit
         return "LLM initialization failed. Cannot generate report."
 
-    if search_tool_instance is None or (isinstance(search_tool_instance, BaseTool) and "Dummy" in search_tool_instance.name):
-        st.warning("Reminder: Web search tool is not fully functional. Results may be limited.", icon="⚠️")
+    # The global search_tool_instance is used. Its status is shown in the sidebar.
+    # A warning is also shown in create_political_agents_streamlit if it's None.
 
     try:
         user_start_date_obj = datetime.strptime(start_date_str_param, "%Y-%m-%d").date()
     except ValueError:
-        st.error("Invalid start date format. Cannot generate report.")
+        st.error("Invalid start date format for analysis.")
         return "Invalid start date format. Cannot generate report."
 
     current_date_obj = date.today()
@@ -378,150 +356,170 @@ def execute_crew_analysis_streamlit(political_entity_name, start_date_str_param,
     past_sentiment_end_obj = user_start_date_obj - timedelta(days=5)
     past_sentiment_start_str_param = past_sentiment_start_obj.strftime("%Y-%m-%d")
     past_sentiment_end_str_param = past_sentiment_end_obj.strftime("%Y-%m-%d")
+    
+    agents = create_political_agents_streamlit(leader_name, llm)
+    if not agents: # Should not happen if LLM is fine, but good check
+        st.error("Failed to create agents.")
+        return "Agent creation failed."
 
-    agents_list = create_political_agents_streamlit(political_entity_name, llm_instance)
-    tasks_list = create_political_tasks_streamlit(
-        political_entity_name, agents_list, start_date_str_param,
-        current_date_str_param, past_sentiment_start_str_param, past_sentiment_end_str_param
+    tasks = create_political_tasks_streamlit(
+        leader_name, agents, start_date_str_param, current_date_str_param,
+        past_sentiment_start_str_param, past_sentiment_end_str_param
     )
+    if not tasks: # Should not happen, but good check
+        st.error("Failed to create tasks.")
+        return "Task creation failed."
 
-    crew_instance = Crew(
-        agents=agents_list, tasks=tasks_list, process=Process.sequential, verbose=True
-    )
+    crew = Crew(agents=agents, tasks=tasks, process=Process.sequential, verbose=1) # verbose=1 for some logs
 
-    final_report_string = "Analysis failed or no output was generated after retries."
+    final_report_output = f"Analysis for {leader_name} failed after {max_retries} retries."
     for attempt in range(max_retries):
         try:
-            with st.status(f"Running CrewAI analysis for '{political_entity_name}'... Attempt {attempt + 1}/{max_retries}", expanded=True) as status_ui:
+            with st.status(f"Running CrewAI analysis for '{leader_name}'... Attempt {attempt + 1}/{max_retries}", expanded=True) as status_ui:
                 st.write(f"Analyzing period: {start_date_str_param} to {current_date_str_param}. This may take several minutes...")
-                result_object = crew_instance.kickoff()
+                # CrewAI verbose output goes to console/logs, not easily into st.status
+                result = crew.kickoff()
                 status_ui.update(label=f"Analysis attempt {attempt + 1} completed!", state="complete", expanded=False)
-            
-            if result_object:
-                if hasattr(result_object, 'raw') and result_object.raw:
-                    final_report_string = result_object.raw
-                elif hasattr(result_object, 'tasks_output') and result_object.tasks_output:
-                    last_task_output = result_object.tasks_output[-1]
+
+            if result:
+                # Try to extract the raw output, common for the last task in CrewAI
+                if hasattr(result, 'raw') and result.raw:
+                    final_report_output = result.raw
+                elif hasattr(result, 'tasks_output') and result.tasks_output: # Newer CrewAI/LangGraph
+                    last_task_output = result.tasks_output[-1]
                     if hasattr(last_task_output, 'raw_output') and last_task_output.raw_output:
-                        final_report_string = last_task_output.raw_output
+                         final_report_output = last_task_output.raw_output
                     elif hasattr(last_task_output, 'result'):
-                        final_report_string = str(last_task_output.result)
-                    elif isinstance(last_task_output.description, str):
-                         final_report_string = last_task_output.description
-                elif isinstance(result_object, str):
-                    final_report_string = result_object
-                else:
-                    final_report_string = str(result_object)
-                    st.warning("CrewAI returned an unexpected object type. Displaying its string representation.")
-                
-                if "failed" not in final_report_string.lower() and "no output" not in final_report_string.lower():
+                        final_report_output = str(last_task_output.result)
+                    else: # Fallback if specific attributes aren't there
+                        final_report_output = str(last_task_output) # Or str(result)
+                elif isinstance(result, str): # If kickoff directly returns a string
+                    final_report_output = result
+                else: # Fallback for unexpected result types
+                    final_report_output = str(result)
+                    st.warning("CrewAI returned an unexpected result format. Displaying as string.")
+
+                if "failed" not in final_report_output.lower() and "no output" not in final_report_output.lower():
                     st.success("Report generated successfully!")
-                    return final_report_string
+                    return final_report_output # Successful exit from loop and function
             else:
-                final_report_string = f"No output was generated by the crew on attempt {attempt + 1}."
-                st.warning(final_report_string)
+                final_report_output = f"No output from CrewAI on attempt {attempt + 1}."
+                st.warning(final_report_output)
 
         except Exception as e:
-            st.error(f"Error during CrewAI analysis (Attempt {attempt + 1}): {str(e)}")
+            st.error(f"CrewAI analysis attempt {attempt + 1} failed: {str(e)}")
+            # import traceback # For server-side debugging
+            # print(traceback.format_exc())
             if attempt < max_retries - 1:
-                st.warning(f"Retrying in 10 seconds... (Attempt {attempt + 2}/{max_retries})")
-                time.sleep(10)
+                st.warning(f"Retrying in {5 * (attempt + 1)} seconds...")
+                time.sleep(5 * (attempt + 1)) # Exponential backoff might be too much, simple wait
             else:
-                st.error("Max retries reached. Unable to complete the political analysis.")
-                final_report_string = "Political analysis failed after multiple retries due to errors."
+                st.error("Max retries reached. Unable to complete the analysis.")
+                final_report_output = "Analysis failed after multiple retries due to errors."
         
-        if "failed" not in final_report_string.lower() and "no output" not in final_report_string.lower():
-            break 
-
-    return final_report_string
+        # If a successful report was generated, we would have returned from the function already.
+        # If we are here, it means the attempt failed or produced no good output.
+        
+    return final_report_output # Return the last status (likely an error or "no output" message)
 
 # --- Main Streamlit App UI and Logic ---
 def run_main_app_logic():
-    """Contains the main UI and logic for the analysis suite, run after password check."""
-    st.title(" PoliSight Analyst Suite 🕵️‍♂️📊")
+    """Main function to run the Streamlit application UI and logic, called after password success."""
+    st.title("️PoliSight Analyst Suite 🕵️‍♂️📊") # Corrected title
     st.markdown("Welcome! Get detailed political analysis reports on political leaders, parties, or influencers. Please configure below and click 'Analyze'.")
 
-    if 'app_initialized' not in st.session_state:
+    # Initialize keys and tools if not already done in this session
+    # This ensures sidebar messages about key status are shown.
+    if 'keys_initialized' not in st.session_state:
         initialize_streamlit_keys_and_tools()
-        st.session_state.app_initialized = True
+        st.session_state.keys_initialized = True
+        # st.rerun() # Consider if needed to refresh sidebar immediately, can cause issues.
 
     with st.sidebar:
-        # API and Tool status is already displayed by initialize_streamlit_keys_and_tools()
+        # Key status is already shown by initialize_streamlit_keys_and_tools()
         st.header("⚙️ Analysis Configuration")
-        political_entity_name_input = st.text_input(
-            "Enter Political Entity Name:", placeholder="e.g., M.K. Stalin, DMK Party, etc."
-        )
+        leader_name_input = st.text_input("Enter Political Entity Name:", placeholder="e.g., M.K. Stalin, DMK Party")
+        
         default_start_date = date.today() - timedelta(days=7)
         start_date_input = st.date_input(
             "Select Analysis Start Date:", value=default_start_date,
             min_value=date(2000, 1, 1), max_value=date.today(), format="YYYY-MM-DD"
         )
+        
         llm_option = st.radio(
             "Choose LLM Engine:",
             ("GPT-4o-mini (OpenAI - Cloud, Requires API Key)", "Ollama (Local - e.g., Llama3.1 - Advanced Setup)"),
-            key="llm_choice_radio",
+            key="llm_choice_main_app", # Unique key
             help="Ensure API keys are correctly set in Streamlit Secrets for OpenAI. For Ollama, ensure your local server is running."
         )
         use_gpt_selection = "GPT-4o-mini" in llm_option
 
-        # Display warnings based on key status directly under the LLM choice for better visibility
-        if use_gpt_selection and not openai_key_loaded_successfully:
-            st.error("OpenAI API Key is not loaded. GPT model will not work.", icon="❗")
-        if not serper_key_loaded_successfully and (search_tool_instance is None or "Dummy" in getattr(search_tool_instance, 'name', '')):
+        # Display warnings based on key status directly under the LLM choice
+        if use_gpt_selection and not openai_api_key_loaded:
+            st.error("OpenAI API Key not loaded. GPT model will not work.", icon="❗")
+        
+        # This warning is about the search tool's overall status
+        if not serper_api_key_loaded and (search_tool_instance is None or "Dummy" in getattr(search_tool_instance, 'name', '')):
              st.warning("Serper API Key not loaded or tool failed. Web search will be limited/unavailable.", icon="⚠️")
 
         submit_button = st.button("🚀 Analyze Political Entity", type="primary", use_container_width=True)
 
     if submit_button:
-        if not political_entity_name_input.strip():
+        if not leader_name_input.strip():
             st.warning("Please enter a Political Entity Name to analyze.")
-        elif not start_date_input:
-            st.warning("Please select a valid Start Date for the analysis.")
+        elif not start_date_input: # Should not happen with date_input default
+            st.warning("Please select a valid Start Date.")
         else:
             start_date_str_for_crew = start_date_input.strftime("%Y-%m-%d")
-            ready_to_run = True
-
-            if use_gpt_selection and not openai_key_loaded_successfully:
-                st.error("Cannot run analysis: OpenAI API Key is missing or invalid. Check Streamlit Secrets and sidebar status.")
-                ready_to_run = False
             
-            if ready_to_run:
-                st.info(f"Starting analysis for: **{political_entity_name_input}** from **{start_date_str_for_crew}** using **{'GPT (OpenAI)' if use_gpt_selection else 'Ollama'}**...")
+            # Pre-flight checks before running analysis
+            can_run_analysis = True
+            if use_gpt_selection and not openai_api_key_loaded:
+                st.error("Cannot start analysis: OpenAI API Key is not loaded. Check Streamlit Secrets and sidebar status.")
+                can_run_analysis = False
+            
+            # You might add a stricter check for Serper if it's absolutely critical
+            # if not serper_api_key_loaded:
+            #     st.error("Cannot start analysis: Serper API Key for web search is not loaded.")
+            #     can_run_analysis = False
+
+            if can_run_analysis:
+                st.info(f"Starting analysis for: **{leader_name_input}** from **{start_date_str_for_crew}** using **{'GPT (OpenAI)' if use_gpt_selection else 'Ollama'}**...")
+                
                 final_report = execute_crew_analysis_streamlit(
-                    political_entity_name_input, start_date_str_for_crew, use_gpt_model=use_gpt_selection
+                    leader_name_input, start_date_str_for_crew, use_gpt_model=use_gpt_selection
                 )
+                
                 if final_report and "failed" not in final_report.lower() and "no output" not in final_report.lower():
-                    st.subheader(f"📊 Final Analysis Report for {political_entity_name_input}")
-                    st.markdown(final_report, unsafe_allow_html=True)
+                    st.subheader(f"📊 Final Analysis Report for {leader_name_input}")
+                    st.markdown(final_report, unsafe_allow_html=True) # Allow HTML if your report might contain it
+                    
                     current_date_for_filename = date.today().strftime('%Y%m%d')
-                    report_file_name = f"{political_entity_name_input.replace(' ', '_').lower()}_report_{start_date_str_for_crew}_to_{current_date_for_filename}.md"
+                    report_file_name = f"{leader_name_input.replace(' ', '_').lower()}_report_{start_date_str_for_crew}_to_{current_date_for_filename}.md"
                     st.download_button(
-                        label="📥 Download Report as Markdown", data=final_report,
-                        file_name=report_file_name, mime="text/markdown"
+                        label="📥 Download Report as Markdown",
+                        data=final_report,
+                        file_name=report_file_name,
+                        mime="text/markdown"
                     )
-                elif final_report:
+                elif final_report: # Contains an error message from execute_crew_analysis
                     st.error(f"Report Generation Process Concluded With Issues: {final_report}")
-                else:
-                    st.error("Report generation failed or returned an unexpected empty result.")
+                else: # Should ideally not happen
+                    st.error("Report generation failed or returned an unexpected empty result. Check logs if running locally.")
     
     st.markdown("---")
     st.caption("PoliSight Analyst Suite - Powered by CrewAI & Streamlit")
 
 # --- App Entry Point with Password Check ---
 if __name__ == "__main__":
-    # Initialize session state for password check
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
 
     if st.session_state.password_correct:
         run_main_app_logic()
     else:
-        # Display password input form
-        # The check_password() function handles the input and error messages.
         if check_password():
             st.session_state.password_correct = True
-            # If password is correct, rerun to clear password input and show the main app.
-            # This also ensures initialize_streamlit_keys_and_tools runs in the context of the main app display.
             st.rerun()
-        # If check_password() returns False, it means either no input yet or incorrect password.
-        # The check_password() function itself shows the relevant st.info or st.error.
+        # If check_password returns False, it handles displaying the password input or error messages.
+        # No st.stop() needed here as the UI flow is managed by the password check.
